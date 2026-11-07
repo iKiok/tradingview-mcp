@@ -9,6 +9,9 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCREENSHOT_DIR = join(dirname(dirname(__dirname)), 'screenshots');
+// Page.captureScreenshot waits for a fresh frame; if the window is throttled (covered/unfocused)
+// it can stall for minutes. Fail fast instead.
+const CAPTURE_TIMEOUT_MS = 15000;
 
 export async function captureScreenshot({ region, filename, method, waitForRender = false } = {}) {
   mkdirSync(SCREENSHOT_DIR, { recursive: true });
@@ -63,7 +66,12 @@ export async function captureScreenshot({ region, filename, method, waitForRende
   const params = { format: 'png' };
   if (clip) params.clip = clip;
 
-  const { data } = await client.Page.captureScreenshot(params);
+  const { data } = await Promise.race([
+    client.Page.captureScreenshot(params),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(
+      `Screenshot timed out after ${CAPTURE_TIMEOUT_MS}ms: TradingView is not rendering frames (window covered or minimized?). Bring it to the front, or relaunch with launch_tv_debug.ps1 which disables background throttling.`
+    )), CAPTURE_TIMEOUT_MS).unref()),
+  ]);
   writeFileSync(filePath, Buffer.from(data, 'base64'));
 
   return {

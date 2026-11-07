@@ -2,6 +2,8 @@ import { evaluate } from './connection.js';
 
 const DEFAULT_TIMEOUT = 10000;
 const POLL_INTERVAL = 50;
+// Render-settle poll kept at upstream's 200ms: 3 stable polls ~= 600ms settle for screenshots.
+const RENDER_POLL_INTERVAL = 200;
 // Consecutive ready samples required (guards against sampling before the load starts).
 const READY_SAMPLES = 2;
 
@@ -108,7 +110,7 @@ export async function waitForChartRender(timeout = 5000) {
 
     if (!state || state.isLoading || !state.canvasWidth || !state.canvasHeight) {
       stableCount = 0;
-      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+      await new Promise(r => setTimeout(r, RENDER_POLL_INTERVAL));
       continue;
     }
 
@@ -117,7 +119,7 @@ export async function waitForChartRender(timeout = 5000) {
     else { stableCount = 0; lastSignature = signature; }
 
     if (stableCount >= 3) return true;
-    await new Promise(r => setTimeout(r, POLL_INTERVAL));
+    await new Promise(r => setTimeout(r, RENDER_POLL_INTERVAL));
   }
 
   return false;
