@@ -8,7 +8,11 @@ import { evaluate, evaluateAsync, getClient } from '../connection.js';
 // ── Monaco finder (injected into TV page) ──
 const FIND_MONACO = `
   (function findMonacoEditor() {
-    var container = document.querySelector('.monaco-editor.pine-editor-monaco');
+    // Pick the LAID-OUT editor: TradingView can leave a stale 0x0 .pine-editor-monaco
+    // in the DOM, and querySelector returns that one, whose React fiber is detached.
+    var container = Array.prototype.slice
+      .call(document.querySelectorAll('.monaco-editor.pine-editor-monaco'))
+      .filter(function(e) { return e.getBoundingClientRect().width > 0; })[0];
     if (!container) return null;
     var el = container;
     var fiberKey;
