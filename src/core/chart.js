@@ -42,10 +42,7 @@ export async function setSymbol({ symbol, _deps }) {
   await evaluateAsync(`
     (function() {
       var chart = ${CHART_API};
-      return new Promise(function(resolve) {
-        chart.setSymbol(${safeString(symbol)}, {});
-        setTimeout(resolve, 500);
-      });
+      chart.setSymbol(${safeString(symbol)}, {});
     })()
   `);
   const ready = await waitForChartReady(symbol);
