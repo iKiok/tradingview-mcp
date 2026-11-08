@@ -285,17 +285,71 @@ export async function setSource({ source }) {
   return { success: true, lines_set: source.split('\n').length };
 }
 
+// ── Compile settle detection (replaces fixed 2000/2500ms sleeps) ──
+// Snapshot of chart studies: id -> status type (TV: 0/1 = loading, 2 = calculated, 3 = error).
+const STUDY_SNAPSHOT_JS = `
+  (function() {
+    var out = {};
+    try {
+      var ss = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().model().dataSources();
+      for (var i = 0; i < ss.length; i++) {
+        var s = ss[i];
+        try { if (s.metaInfo && s.status) out[String(s.id())] = s.status().type; } catch (e) {}
+      }
+    } catch (e) {}
+    return out;
+  })()
+`;
+
+async function snapshotStudies() {
+  try { return (await evaluate(STUDY_SNAPSHOT_JS)) || {}; } catch { return {}; }
+}
+
+// Resolve once the compile visibly took effect: a study went loading -> calculated/error,
+// a new study appeared and finished, or error markers appeared. Measured 2026-11-08:
+// add ~1.0-1.5s, update ~1.4-1.9s. Returns false on timeout (same as the old fixed sleep).
+async function waitForCompileSettled(before, timeout) {
+  const start = Date.now();
+  const sawLoading = new Set();
+  while (Date.now() - start < timeout) {
+    await new Promise(r => setTimeout(r, 50));
+    const now = await snapshotStudies();
+    for (const id of Object.keys(now)) {
+      const st = now[id];
+      const isNew = !(id in before);
+      if (st === 0 || st === 1) { sawLoading.add(id); continue; }
+      if ((st === 2 || st === 3) && (sawLoading.has(id) || isNew)) return true;
+    }
+    let markerCount = 0;
+    try {
+      markerCount = await evaluate(`
+        (function() {
+          var m = ${FIND_MONACO};
+          if (!m) return 0;
+          var model = m.editor.getModel();
+          if (!model) return 0;
+          return m.env.editor.getModelMarkers({ resource: model.uri }).filter(function(mk) { return mk.severity === 8; }).length;
+        })()
+      `);
+    } catch {}
+    if (markerCount > 0) return true;
+  }
+  return false;
+}
+
 export async function compile() {
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
+  const before = await snapshotStudies();
   const clicked = await evaluate(`
     (function() {
       var btns = document.querySelectorAll('button');
       var fallback = null;
       var saveBtn = null;
       for (var i = 0; i < btns.length; i++) {
-        var text = btns[i].textContent.trim();
+        // Once a script is on the chart, "Update on chart" is an icon-only button (title, no text).
+        var text = btns[i].textContent.trim() || (btns[i].offsetParent !== null ? (btns[i].getAttribute('title') || '') : '');
         if (/save and add to chart/i.test(text)) {
           btns[i].click();
           return 'Save and add to chart';
@@ -307,7 +361,7 @@ export async function compile() {
           saveBtn = btns[i];
         }
       }
-      if (fallback) { fallback.click(); return fallback.textContent.trim(); }
+      if (fallback) { fallback.click(); return fallback.textContent.trim() || fallback.getAttribute('title'); }
       if (saveBtn) { saveBtn.click(); return 'Pine Save'; }
       return null;
     })()
@@ -319,8 +373,8 @@ export async function compile() {
     await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter' });
   }
 
-  await new Promise(r => setTimeout(r, 2000));
-  return { success: true, button_clicked: clicked || 'keyboard_shortcut', source: 'dom_fallback' };
+  const settled = await waitForCompileSettled(before, 4000);
+  return { success: true, button_clicked: clicked || 'keyboard_shortcut', source: 'dom_fallback', settled };
 }
 
 export async function getErrors() {
@@ -444,6 +498,7 @@ export async function smartCompile() {
     })()
   `);
 
+  const before = await snapshotStudies();
   const buttonClicked = await evaluate(`
     (function() {
       var btns = document.querySelectorAll('button');
@@ -451,7 +506,8 @@ export async function smartCompile() {
       var updateBtn = null;
       var saveBtn = null;
       for (var i = 0; i < btns.length; i++) {
-        var text = btns[i].textContent.trim();
+        // Once a script is on the chart, "Update on chart" is an icon-only button (title, no text).
+        var text = btns[i].textContent.trim() || (btns[i].offsetParent !== null ? (btns[i].getAttribute('title') || '') : '');
         if (/save and add to chart/i.test(text)) {
           btns[i].click();
           return 'Save and add to chart';
@@ -473,7 +529,7 @@ export async function smartCompile() {
     await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter' });
   }
 
-  await new Promise(r => setTimeout(r, 2500));
+  await waitForCompileSettled(before, 5000);
 
   const errors = await evaluate(`
     (function() {
