@@ -12,7 +12,9 @@ const SCREENSHOT_DIR = join(dirname(dirname(__dirname)), 'screenshots');
 
 export async function batchRun({ symbols, timeframes, action, delay_ms, ohlcv_count }) {
   const tfs = timeframes && timeframes.length > 0 ? timeframes : [null];
-  const delay = delay_ms || 2000;
+  // get_ohlcv reads main-series bars, which are loaded once waitForChartReady returns, so it
+  // needs no extra settle time. Screenshots/strategy results keep 2s for indicators to draw.
+  const delay = delay_ms ?? (action === 'get_ohlcv' ? 0 : 2000);
   const results = [];
 
   let colPath, apiPath;
@@ -31,7 +33,7 @@ export async function batchRun({ symbols, timeframes, action, delay_ms, ohlcv_co
           else if (apiPath) await evaluate(`${apiPath}.setResolution(${safeString(tf)})`);
         }
 
-        await waitForChartReady(symbol);
+        await waitForChartReady(symbol, tf);
         await new Promise(r => setTimeout(r, delay));
 
         let actionResult;
