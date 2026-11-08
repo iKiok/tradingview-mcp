@@ -94,7 +94,15 @@ export async function list() {
   return { success: true, alert_count: result?.alerts?.length || 0, source: 'internal_api', alerts: result?.alerts || [], error: result?.error };
 }
 
-export async function deleteAlerts({ delete_all, alert_ids, alert_id } = {}) {
+// Deleting every alert needs this exact string in `confirm` (idea from upstream PR #429): the
+// user's alerts drive real mobile pushes, and one stray delete_all would wipe them all.
+export const DELETE_ALL_CONFIRM = 'DELETE_ALL_ALERTS';
+
+export async function deleteAlerts({ delete_all, alert_ids, alert_id, confirm } = {}) {
+  if (delete_all && confirm !== DELETE_ALL_CONFIRM) {
+    return { success: false, source: 'internal_api', deleted: 0,
+      error: `delete_all deletes every alert. Pass confirm: "${DELETE_ALL_CONFIRM}" to proceed; nothing was deleted.` };
+  }
   // Resolve the set of alert ids to delete.
   let ids = [];
   if (Array.isArray(alert_ids)) ids = ids.concat(alert_ids);

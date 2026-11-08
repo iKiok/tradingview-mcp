@@ -12,9 +12,60 @@ function _resolve(deps) {
   };
 }
 
-export async function drawShape({ shape, point, point2, overrides: overridesRaw, text, _deps }) {
+/**
+ * Style shorthand -> TradingView override keys (upstream PR #536). The schema strips unknown
+ * keys, so `color` / `linewidth` / `linestyle` used to vanish silently. Explicit `overrides`
+ * wins on conflict.
+ */
+export function buildOverrides({ overrides: raw, color, linecolor, linewidth, linestyle, textcolor, fontsize } = {}) {
+  let explicit = {};
+  if (raw) {
+    explicit = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (typeof explicit !== 'object' || Array.isArray(explicit)) {
+      throw new Error('overrides must be a JSON object');
+    }
+  }
+  const shorthand = {};
+  const lc = linecolor !== undefined ? linecolor : color;
+  if (lc !== undefined) shorthand.linecolor = lc;
+  if (linewidth !== undefined) shorthand.linewidth = linewidth;
+  if (linestyle !== undefined) shorthand.linestyle = linestyle;
+  if (textcolor !== undefined) shorthand.textcolor = textcolor;
+  if (fontsize !== undefined) shorthand.fontsize = fontsize;
+  return { ...shorthand, ...explicit };
+}
+
+/** Compare a requested override against what the chart reports back. */
+export function stylesEqual(applied, requested) {
+  if (applied === undefined || applied === null) return false;
+  if (typeof requested === 'number') return Number(applied) === requested;
+  if (typeof requested === 'string' && typeof applied === 'string') {
+    return normalizeColor(applied) === normalizeColor(requested);
+  }
+  return applied === requested;
+}
+
+/** #RRGGBB / #rgb / rgb(a)(...) -> a comparable "r,g,b" string. */
+export function normalizeColor(v) {
+  if (typeof v !== 'string') return v;
+  const s = v.trim().toLowerCase();
+  let m = /^#([0-9a-f]{3})$/.exec(s);
+  if (m) {
+    const [r, g, b] = m[1].split('');
+    return [r + r, g + g, b + b].map(h => parseInt(h, 16)).join(',');
+  }
+  m = /^#([0-9a-f]{6})$/.exec(s);
+  if (m) {
+    return [m[1].slice(0, 2), m[1].slice(2, 4), m[1].slice(4, 6)].map(h => parseInt(h, 16)).join(',');
+  }
+  m = /^rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)/.exec(s);
+  if (m) return [m[1], m[2], m[3]].map(n => Math.round(Number(n))).join(',');
+  return s;
+}
+
+export async function drawShape({ shape, point, point2, overrides: overridesRaw, text, color, linecolor, linewidth, linestyle, textcolor, fontsize, _deps }) {
   const { evaluate, evaluateAsync, getChartApi, sleep } = _resolve(_deps);
-  const overrides = overridesRaw ? (typeof overridesRaw === 'string' ? JSON.parse(overridesRaw) : overridesRaw) : {};
+  const overrides = buildOverrides({ overrides: overridesRaw, color, linecolor, linewidth, linestyle, textcolor, fontsize });
   const apiPath = await getChartApi();
   const overridesStr = JSON.stringify(overrides || {});
   const textStr = text ? JSON.stringify(text) : '""';
@@ -65,7 +116,31 @@ export async function drawShape({ shape, point, point2, overrides: overridesRaw,
     await evaluate(`${apiPath}.removeEntity(${safeString(newId)})`);
     return { success: false, shape, entity_id: null, error: 'unknown_shape', drawn_as: landedName };
   }
-  return { success: true, shape, entity_id: newId };
+  const result = { success: true, shape, entity_id: newId };
+
+  // Read the style back so a requested override that did not land is visible (upstream PR #536).
+  if (Object.keys(overrides).length) {
+    result.style_requested = overrides;
+    try {
+      const applied = await evaluate(`
+        (function() {
+          var s = ${apiPath}.getShapeById(${safeString(newId)});
+          if (!s) return null;
+          try { return s.getProperties(); } catch (e) { return null; }
+        })()
+      `);
+      if (applied) {
+        result.style_applied = {};
+        const mismatched = [];
+        for (const k of Object.keys(overrides)) {
+          result.style_applied[k] = applied[k];
+          if (!stylesEqual(applied[k], overrides[k])) mismatched.push(k);
+        }
+        if (mismatched.length) result.style_not_applied = mismatched;
+      }
+    } catch { /* readback is diagnostic only: never fail the draw over it */ }
+  }
+  return result;
 }
 
 export async function listDrawings() {

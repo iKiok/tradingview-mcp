@@ -20,9 +20,10 @@ export function registerAlertTools(server) {
 
   server.tool('alert_delete', 'Delete a specific alert by id, or all active alerts', {
     alert_id: z.coerce.number().optional().describe('Alert id to delete (from alert_list)'),
-    delete_all: booleanParam().optional().describe('Delete all active alerts'),
-  }, async ({ alert_id, delete_all }) => {
-    try { return jsonResult(await core.deleteAlerts({ alert_id, delete_all })); }
+    delete_all: booleanParam().optional().describe('Delete all active alerts (also needs confirm)'),
+    confirm: z.string().optional().describe('Required with delete_all: exactly "DELETE_ALL_ALERTS"'),
+  }, async ({ alert_id, delete_all, confirm }) => {
+    try { return jsonResult(await core.deleteAlerts({ alert_id, delete_all, confirm })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 }
