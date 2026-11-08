@@ -7,6 +7,7 @@
 ### "What's on my chart right now?"
 1. `chart_get_state` → symbol, timeframe, chart type, list of all indicators with entity IDs
 2. `data_get_study_values` → current numeric values from all visible indicators (RSI, MACD, BBands, EMAs, etc.)
+   - `last_bar_values` (numbers) = the LATEST bar; `values` (strings) = data window, follows the crosshair. Hidden indicators are skipped.
 3. `quote_get` → real-time price, OHLC, volume for current symbol
 
 ### "What levels/lines/labels are showing?"
@@ -46,7 +47,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 
 ### "Work on Pine Script"
 1. `pine_set_source` → inject code into editor
-2. `pine_smart_compile` → compile with auto-detection + error check
+2. `pine_smart_compile` → compile with auto-detection + error check (waits up to 1.7s after the click for warning markers)
 3. `pine_get_errors` → read compilation errors
 4. `pine_get_console` → read log.info() output
 5. `pine_get_source` → read current code back (WARNING: can be very large for complex scripts)
@@ -60,13 +61,15 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 3. `replay_autoplay` → auto-advance (set speed with `speed` param in ms)
 4. `replay_trade` with `action: "buy"/"sell"/"close"` → execute trades
 5. `replay_status` → check position, P&L, current date
-6. `replay_stop` → return to realtime
+6. `replay_stop` → return to realtime (waits for live bars; `realtime: true`)
 
 ### "Screen multiple symbols"
 - `batch_run` with `symbols: ["ES1!", "NQ1!", "YM1!"]` and `action: "screenshot"` or `"get_ohlcv"`
 
 ### "Draw on the chart"
 - `draw_shape` → horizontal_line, trend_line, rectangle, text (pass point + optional point2)
+  - style: `color`, `linewidth`, `linestyle`, `textcolor`, `fontsize`; result has `style_applied` / `style_not_applied`
+  - unknown shape names fail with `unknown_shape` (TradingView would silently draw a flag)
 - `draw_list` → see what's drawn
 - `draw_remove_one` → remove by ID
 - `draw_clear` → remove all
@@ -74,7 +77,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 ### "Manage alerts"
 - `alert_create` → set price alert (condition: "crossing", "greater_than", "less_than")
 - `alert_list` → view active alerts
-- `alert_delete` → remove alerts
+- `alert_delete` → remove alerts (`delete_all: true` also needs `confirm: "DELETE_ALL_ALERTS"`)
 
 ### "Navigate the UI"
 - `ui_open_panel` → open/close pine-editor, strategy-tester, watchlist, alerts, trading
@@ -104,7 +107,8 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 | Tool | Typical Output |
 |------|---------------|
 | `quote_get` | ~200 bytes |
-| `data_get_study_values` | ~500 bytes (all indicators) |
+| `data_get_study_values` | ~1-8 KB (encoded source inputs dropped) |
+| `data_get_pine_polylines` | ~17 KB summary on a ridgeline script; verbose ~500 KB |
 | `data_get_pine_lines` | ~1-3 KB per study (deduplicated levels) |
 | `data_get_pine_labels` | ~2-5 KB per study (capped at 50) |
 | `data_get_pine_tables` | ~1-4 KB per study (formatted rows) |
@@ -114,6 +118,9 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 | `capture_screenshot` | ~300 bytes (returns file path, not image data) |
 
 ## Tool Conventions
+
+- Debug log: set `TV_MCP_LOG_FILE=<path>` to append one JSON line per tool call (tool, args, duration, start of result)
+- Screenshots time out (15s) if the TradingView window is minimized - keep it restored
 
 - All tools return `{ success: true/false, ... }`
 - Entity IDs (from `chart_get_state`) are session-specific — don't cache across sessions
