@@ -19,7 +19,7 @@ export async function captureScreenshot({ region, filename, method, waitForRende
   if (waitForRender) await waitForChartRender();
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const fname = (filename || `tv_${region || 'full'}_${ts}`).replace(/[\/\\]/g, '_').replace(/\.\./g, '_');
+  const fname = (filename || `tv_${region || 'full'}_${ts}`).replace(/[\/\\]/g, '_').replace(/[:*?"<>|]/g, '_').replace(/\.\./g, '_');
   const filePath = join(SCREENSHOT_DIR, `${fname}.png`);
 
   if (method === 'api') {

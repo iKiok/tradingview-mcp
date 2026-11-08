@@ -1,7 +1,7 @@
 /**
  * Core batch execution logic.
  */
-import { evaluate, evaluateAsync, getClient, getChartApi, getChartCollection, safeString } from '../connection.js';
+import { evaluate, getClient, getChartApi, getChartCollection, safeString, KNOWN_PATHS } from '../connection.js';
 import { waitForChartReady } from '../wait.js';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
@@ -40,20 +40,22 @@ export async function batchRun({ symbols, timeframes, action, delay_ms, ohlcv_co
           const client = await getClient();
           const { data } = await client.Page.captureScreenshot({ format: 'png' });
           const ts = new Date().toISOString().replace(/[:.]/g, '-');
-          const fname = `batch_${symbol}_${tf || 'default'}_${ts}`.replace(/[\/\\]/g, '_') + '.png';
+          const fname = `batch_${symbol}_${tf || 'default'}_${ts}`.replace(/[\/\\]/g, '_').replace(/[:*?"<>|]/g, '_') + '.png';
           const filePath = join(SCREENSHOT_DIR, fname);
           writeFileSync(filePath, Buffer.from(data, 'base64'));
           actionResult = { file_path: filePath };
         } else if (action === 'get_ohlcv' && apiPath) {
           const limit = Math.min(ohlcv_count || 100, 500);
-          actionResult = await evaluateAsync(`
-            new Promise(function(resolve, reject) {
-              ${apiPath}.exportData({ includeTime: true, includeSeries: true, includeStudies: false })
-                .then(function(result) {
-                  var bars = (result.data || []).slice(-${limit});
-                  resolve({ bar_count: bars.length, last_bar: bars[bars.length - 1] || null });
-                }).catch(reject);
-            })
+          // exportData() rejects on current TV builds; read main-series bars directly (same as data_get_ohlcv).
+          actionResult = await evaluate(`
+            (function() {
+              var bars = ${KNOWN_PATHS.mainSeriesBars};
+              if (!bars || typeof bars.lastIndex !== 'function') throw new Error('bars not available');
+              var end = bars.lastIndex();
+              var start = Math.max(bars.firstIndex(), end - ${limit} + 1);
+              var v = bars.valueAt(end);
+              return { bar_count: end - start + 1, last_bar: v ? { time: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] || 0 } : null };
+            })()
           `);
         } else if (action === 'get_strategy_results') {
           await new Promise(r => setTimeout(r, 1000));
