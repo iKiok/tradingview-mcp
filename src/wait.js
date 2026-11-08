@@ -14,6 +14,16 @@ function bareSymbol(s) {
   return i >= 0 ? str.slice(i + 1) : str;
 }
 
+// True when the chart symbol matches the request. When both carry an exchange prefix the
+// exchange must match too (BINANCE:BTCUSDT != COINBASE:BTCUSDT); a bare ticker matches any
+// exchange (from upstream PR #563).
+export function symbolMatches(expected, actual) {
+  const want = String(expected || '').toUpperCase();
+  const got = String(actual || '').toUpperCase();
+  if (want.includes(':') && got.includes(':')) return want === got;
+  return bareSymbol(want) === bareSymbol(got);
+}
+
 // Normalize resolution: "1D" -> "D", "1W" -> "W"; minutes stay numeric.
 function normTf(tf) {
   return String(tf || '').toUpperCase().replace(/^1(?=[A-Z])/, '');
@@ -29,7 +39,6 @@ function normTf(tf) {
  */
 export async function waitForChartReady(expectedSymbol = null, expectedTf = null, timeout = DEFAULT_TIMEOUT) {
   const start = Date.now();
-  const wantSym = expectedSymbol ? bareSymbol(expectedSymbol) : null;
   const wantTf = expectedTf ? normTf(expectedTf) : null;
   let readyCount = 0;
 
@@ -59,7 +68,7 @@ export async function waitForChartReady(expectedSymbol = null, expectedTf = null
     const ready = !!state
       && !state.isLoading
       && state.barCount > 0
-      && (!wantSym || bareSymbol(state.symbol) === wantSym)
+      && (!expectedSymbol || symbolMatches(expectedSymbol, state.symbol))
       && (!wantTf || normTf(state.resolution) === wantTf);
 
     readyCount = ready ? readyCount + 1 : 0;

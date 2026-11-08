@@ -277,6 +277,40 @@ export function analyze({ source }) {
   };
 }
 
+// pine-facade returns message templates with {placeholders} and a `ctx` map of
+// the real values. Substituting makes the error readable on its own.
+function fillMessage(entry) {
+  const template = entry.message || '';
+  const ctx = entry.ctx;
+  if (!ctx || typeof ctx !== 'object') return template;
+  return template.replace(/\{(\w+)\}/g, (match, key) =>
+    Object.prototype.hasOwnProperty.call(ctx, key) ? String(ctx[key]) : match
+  );
+}
+
+// Render the offending source lines with the compiler's complaint attached, so
+// the caller can fix an error without counting columns by hand.
+export function annotate(source, issues) {
+  const lines = source.split(/\r?\n/);
+  return issues
+    .map((issue) => {
+      const ln = issue.line;
+      if (!Number.isInteger(ln) || ln < 1 || ln > lines.length) {
+        return `   ? | ${issue.message}`;
+      }
+      const src = lines[ln - 1];
+      // The caret may legitimately sit one past the last character ("end of
+      // line without line continuation"), but no further — clamp so a bad
+      // column can't allocate a huge pad.
+      const col = Number.isInteger(issue.column) ? issue.column : 1;
+      const caretAt = Math.min(Math.max(col, 1), src.length + 1);
+      const gutter = String(ln).padStart(4, ' ');
+      const pad = `${' '.repeat(5)}|${' '.repeat(caretAt)}`;
+      return `${gutter} | ${src}\n${pad}^-- ${issue.message}`;
+    })
+    .join('\n');
+}
+
 export async function check({ source }) {
   const formData = new URLSearchParams();
   formData.append('source', source);
@@ -309,13 +343,14 @@ export async function check({ source }) {
         errors.push({
           line: e.start?.line, column: e.start?.column,
           end_line: e.end?.line, end_column: e.end?.column,
-          message: e.message,
+          message: fillMessage(e),
+          code: e.code,
         });
       }
     }
     if (inner.warnings2 && inner.warnings2.length > 0) {
       for (const w of inner.warnings2) {
-        warnings.push({ line: w.start?.line, column: w.start?.column, message: w.message });
+        warnings.push({ line: w.start?.line, column: w.start?.column, message: fillMessage(w), code: w.code });
       }
     }
   }
@@ -325,6 +360,7 @@ export async function check({ source }) {
   }
 
   const compiled = errors.length === 0;
+  const flagged = [...errors, ...warnings];
   return {
     success: true,
     compiled,
@@ -332,6 +368,7 @@ export async function check({ source }) {
     warning_count: warnings.length,
     errors: errors.length > 0 ? errors : undefined,
     warnings: warnings.length > 0 ? warnings : undefined,
+    annotated: flagged.length > 0 ? annotate(source, flagged) : undefined,
     note: compiled ? 'Pine Script compiled successfully.' : undefined,
   };
 }
@@ -582,6 +619,8 @@ export async function getConsole() {
   return { success: true, entries: entries || [], entry_count: entries?.length || 0 };
 }
 
+const WARNING_MARKER_FLOOR_MS = 1700;
+
 export async function smartCompile({ allowTitleMismatch = false } = {}) {
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
@@ -598,6 +637,7 @@ export async function smartCompile({ allowTitleMismatch = false } = {}) {
   `);
 
   const before = await snapshotStudies();
+  const tClick = Date.now();
   const buttonClicked = await evaluate(`
     (function() {
       var btns = document.querySelectorAll('button');
@@ -628,7 +668,7 @@ export async function smartCompile({ allowTitleMismatch = false } = {}) {
 
   await waitForCompileSettled(before, 5000);
 
-  const errors = await evaluate(`
+  const readMarkers = () => evaluate(`
     (function() {
       var m = ${FIND_MONACO};
       if (!m) return [];
@@ -640,6 +680,14 @@ export async function smartCompile({ allowTitleMismatch = false } = {}) {
       });
     })()
   `);
+  let errors = await readMarkers();
+  // Warning markers are published by a separate lint pass ~1.0-1.4s after the click (measured
+  // 2026-11-08), which can be after the compile settles. No event fires for a clean script, so
+  // poll until a time floor, leaving early as soon as any marker appears.
+  while (!(errors || []).length && Date.now() - tClick < WARNING_MARKER_FLOOR_MS) {
+    await new Promise(r => setTimeout(r, 50));
+    errors = await readMarkers();
+  }
 
   const studiesAfter = await evaluate(`
     (function() {

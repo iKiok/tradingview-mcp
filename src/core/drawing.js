@@ -48,16 +48,24 @@ export async function drawShape({ shape, point, point2, overrides: overridesRaw,
   const expectedId = typeof createdId === 'string' && createdId ? createdId : null;
   const beforeIds = before || [];
   let newId = null;
+  let landedName = null;
   const deadline = Date.now() + 1000;
   for (let i = 0; i < 40 && Date.now() <= deadline; i++) {
-    const after = await evaluate(`${apiPath}.getAllShapes().map(function(s) { return s.id; })`);
+    const after = await evaluate(`${apiPath}.getAllShapes().map(function(s) { return { id: s.id, name: s.name }; })`);
     if (!Array.isArray(after)) break;
-    newId = (expectedId && after.includes(expectedId) ? expectedId : null)
-      || after.find(id => !beforeIds.includes(id)) || null;
-    if (newId) break;
+    const hit = (expectedId && after.find(s => s.id === expectedId))
+      || after.find(s => !beforeIds.includes(s.id)) || null;
+    if (hit) { newId = hit.id; landedName = hit.name; break; }
     await sleep(25);
   }
-  return { success: Boolean(newId), shape, entity_id: newId, ...(!newId && { error: 'shape_not_observed' }) };
+  if (!newId) return { success: false, shape, entity_id: null, error: 'shape_not_observed' };
+
+  // TradingView silently draws a "flag" for an unknown shape name: detect it, remove it, report failure.
+  if (landedName && landedName !== shape) {
+    await evaluate(`${apiPath}.removeEntity(${safeString(newId)})`);
+    return { success: false, shape, entity_id: null, error: 'unknown_shape', drawn_as: landedName };
+  }
+  return { success: true, shape, entity_id: newId };
 }
 
 export async function listDrawings() {

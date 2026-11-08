@@ -2,7 +2,7 @@
  * Core data access logic.
  */
 import { evaluate, evaluateAsync, KNOWN_PATHS, safeString } from '../connection.js';
-import { waitForChartReady } from '../wait.js';
+import { waitForChartReady, symbolMatches } from '../wait.js';
 
 const MAX_OHLCV_BARS = 500;
 const MAX_TRADES = 20;
@@ -382,8 +382,8 @@ async function _getQuoteInternal({ symbol } = {}) {
 
   if (requested) {
     try { originalSymbol = await evaluate(`${CHART_API}.symbol()`); } catch {}
-    const bare = (s) => (s || '').toString().split(':').pop().toUpperCase();
-    if (bare(originalSymbol) !== bare(requested)) {
+    // An exchange-prefixed request must match the exchange too (upstream PR #563).
+    if (!symbolMatches(requested, originalSymbol)) {
       needsRestore = true;
       await evaluateAsync(`
         (function() {

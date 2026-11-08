@@ -7,7 +7,7 @@ describe('drawShape()', () => {
     const calls = [];
     const evaluate = async (expr) => {
       calls.push(expr);
-      if (expr.includes('getAllShapes')) return ['shape_1'];
+      if (expr.includes('getAllShapes')) return expr.includes('name') ? [{ id: 'shape_1', name: 'horizontal_line' }] : ['shape_1'];
       return undefined;
     };
     const evaluateAsync = async (expr) => {
@@ -34,5 +34,23 @@ describe('drawShape()', () => {
     });
     assert.equal(result.success, false);
     assert.equal(result.error, 'shape_not_observed');
+  });
+
+  it('rejects and removes a shape TradingView substituted (unknown name -> flag)', async () => {
+    const calls = [];
+    const evaluate = async (expr) => {
+      calls.push(expr);
+      if (expr.includes('getAllShapes')) return expr.includes('name') ? [{ id: 'x1', name: 'flag' }] : [];
+      return undefined;
+    };
+    const result = await drawShape({
+      shape: 'bogus_shape',
+      point: { time: 100, price: 50 },
+      _deps: { evaluate, evaluateAsync: async () => 'x1', getChartApi: async () => 'window.__api', sleep: async () => {} },
+    });
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'unknown_shape');
+    assert.equal(result.drawn_as, 'flag');
+    assert.ok(calls.some((c) => c.includes('removeEntity') && c.includes('x1')), 'substituted shape removed');
   });
 });
