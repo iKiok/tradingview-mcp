@@ -13,6 +13,7 @@ function _resolve(deps) {
   return {
     evaluate: deps?.evaluate || _evaluate,
     getReplayApi: deps?.getReplayApi || _getReplayApi,
+    sleep: deps?.sleep || ((ms) => new Promise(r => setTimeout(r, ms))),
   };
 }
 
@@ -92,15 +93,54 @@ export async function autoplay({ speed, _deps } = {}) {
   return { success: true, autoplay_active: !!isAutoplay, delay_ms: currentDelay };
 }
 
+// Time of the chart's last bar (seconds), or null.
+const LAST_BAR_TIME = `(function(){ try { var b = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().bars(); var v = b.valueAt(b.lastIndex()); return v ? v[0] : null; } catch (e) { return null; } })()`;
+
 export async function stop({ _deps } = {}) {
-  const { evaluate, getReplayApi } = _resolve(_deps);
+  const { evaluate, getReplayApi, sleep } = _resolve(_deps);
   const rp = await getReplayApi();
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) {
     return { success: true, action: 'already_stopped' };
   }
-  await evaluate(`${rp}.stopReplay()`);
-  return { success: true, action: 'replay_stopped' };
+  // goToRealtime() ends the replay session *and* scrolls the chart back to the
+  // live edge. stopReplay() only routes through requestCloseReplay(), which
+  // calls _setReplayModeEnabled(false) and disconnects the session without ever
+  // clearing the replay manager's state — so the chart stays parked on the
+  // historical bar and isReplayStarted() keeps reporting true. Calling
+  // stopReplay() first also desyncs the manager, after which goToRealtime()
+  // throws "Assertion failed: Replay is not started" and the chart is stuck
+  // until the page is reloaded.
+  //
+  // Deliberately NOT calling hideReplayToolbar(): it syncs hidden-toolbar state
+  // to the user's TradingView cloud account and permanently breaks replay
+  // controls across all their devices (see #19). Leaving the toolbar visible is
+  // harmless — the user can dismiss it themselves.
+  const replayLastBar = await evaluate(LAST_BAR_TIME);
+  await evaluate(`${rp}.goToRealtime()`);
+  // goToRealtime() returns before the session ends. Wait for it (measured: under 2s), then
+  // stopReplay() to leave replay mode: goToRealtime() alone leaves TradingView's hidden
+  // "ReplayStrategy" study (shown as "Unnamed Study") on the chart. stopReplay() is safe once
+  // the session has ended; only calling it BEFORE goToRealtime() desyncs the manager.
+  let ended = false;
+  for (let i = 0; i < 50; i++) {
+    if (!(await evaluate(wv(`${rp}.isReplayStarted()`)))) { ended = true; break; }
+    await sleep(100);
+  }
+  if (ended) { try { await evaluate(`${rp}.stopReplay()`); } catch { /* already closed */ } }
+  // The live bars load after the session ends; wait until the last bar moves past the replay
+  // position so the next read sees today's data, not the replay date (max 5s).
+  let realtime = false;
+  for (let i = 0; i < 50 && ended; i++) {
+    const t = await evaluate(LAST_BAR_TIME);
+    if (t != null && replayLastBar != null && t > replayLastBar) { realtime = true; break; }
+    await sleep(100);
+  }
+  return {
+    success: true, action: 'replay_stopped', realtime,
+    ...(!ended && { warning: 'replay still reported started after 5s' }),
+    ...(ended && !realtime && { warning: 'chart bars did not move past the replay date within 5s' }),
+  };
 }
 
 export async function trade({ action, _deps }) {

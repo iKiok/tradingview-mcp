@@ -278,6 +278,13 @@ export async function getBottomBar() {
 }
 
 export async function getReplayApi() {
+  // TradingView creates _replayApi lazily: it stays null until something calls
+  // TradingViewApi.replayApi() (async). Without this, replay tools fail on a fresh start.
+  await evaluate(`(function() {
+    var api = window.TradingViewApi;
+    if (api && !api._replayApi && typeof api.replayApi === 'function') return api.replayApi().then(function() { return true; });
+    return true;
+  })()`, { awaitPromise: true });
   return verifyAndReturn(KNOWN_PATHS.replayApi, 'Replay API');
 }
 

@@ -108,10 +108,14 @@ function buildGraphicsJS(collectionName, mapKey, filter) {
             if (outer) {
               var inner = outer.get('${mapKey}');
               if (inner) {
-                var coll = inner.get(false);
-                if (coll && coll._primitivesDataById && coll._primitivesDataById.size > 0) {
-                  coll._primitivesDataById.forEach(function(v, id) { items.push({id: id, raw: v}); });
-                }
+                // Keyed by force_overlay: false = drawn in the script's own pane, true = drawn
+                // on the price chart from a pane script (force_overlay=true). Read both.
+                [false, true].forEach(function(fo) {
+                  var coll = inner.get(fo);
+                  if (coll && coll._primitivesDataById && coll._primitivesDataById.size > 0) {
+                    coll._primitivesDataById.forEach(function(v, id) { items.push({id: id, raw: v}); });
+                  }
+                });
               }
             }
           } catch(e) {}
@@ -126,7 +130,9 @@ function buildGraphicsJS(collectionName, mapKey, filter) {
               }
             } catch(e) {}
           }
-          if (items.length > 0) results.push({name: name, count: items.length, items: items});
+          // Drawing x values index into g._indexes (the study's bar-index table), not the chart.
+          if (items.length > 0) results.push({name: name, count: items.length, items: items,
+            indexes: '${collectionName}' === 'dwgpolylines' && g._indexes ? Array.prototype.slice.call(g._indexes) : undefined});
         } catch(e) {}
       }
       return results;
@@ -525,7 +531,20 @@ export async function getStudyValues() {
           var id = null;
           try { id = s.id ? s.id() : null; } catch(e) {}
           var inputs = null;
-          try { var ip = s.inputs ? s.inputs() : null; if (ip && Object.keys(ip).length) inputs = ip; } catch(e) {}
+          try {
+            var ip = s.inputs ? s.inputs() : null;
+            if (ip) {
+              // Drop encoded blobs: a Pine study's "text" input is its compiled source (~90KB on
+              // large scripts), not a setting. Same rule as getIndicator().
+              var kept = {};
+              Object.keys(ip).forEach(function(k) {
+                var v = ip[k];
+                if (typeof v === 'string' && (v.length > 500 || (k === 'text' && v.length > 200))) return;
+                kept[k] = v;
+              });
+              if (Object.keys(kept).length) inputs = kept;
+            }
+          } catch(e) {}
           if (Object.keys(values).length > 0) results.push({ id: id, name: name, inputs: inputs, values: values });
         } catch(e) {}
       }
@@ -570,9 +589,10 @@ export async function getPineLabels({ study_filter, max_labels, verbose } = {}) 
       const v = item.raw;
       const text = v.t || '';
       const price = roundPrice(v.y);
-      if (verbose) return { id: item.id, text, price, x: v.x, yloc: v.yl, size: v.sz, textColor: v.tci, color: v.ci };
-      return { text, price };
-    }).filter(l => l.text || l.price != null);
+      const tooltip = v.tt || undefined;
+      if (verbose) return { id: item.id, text, price, tooltip, x: v.x, yloc: v.yl, size: v.sz, textColor: v.tci, color: v.ci };
+      return tooltip ? { text, price, tooltip } : { text, price };
+    }).filter(l => l.text || l.price != null || l.tooltip);
     if (labels.length > limit) labels = labels.slice(-limit);
     return { name: s.name, total_labels: s.count, showing: labels.length, labels };
   });
@@ -603,6 +623,57 @@ export async function getPineTables({ study_filter } = {}) {
       return { rows: formatted };
     });
     return { name: s.name, tables: tableList };
+  });
+  return { success: true, study_count: studies.length, studies };
+}
+
+// Polylines (polyline.new): points are {x, y}; x indexes the study's bar-index table. Compact
+// output summarises each polyline; verbose returns every point with its bar time.
+export async function getPinePolylines({ study_filter, verbose } = {}) {
+  const filter = study_filter || '';
+  const raw = await evaluate(buildGraphicsJS('dwgpolylines', 'polylines', filter));
+  if (!raw || raw.length === 0) return { success: true, study_count: 0, studies: [] };
+
+  // Point x -> chart bar index through the study's index table.
+  const barIndex = (s, x) => (s.indexes && Number.isInteger(x) ? s.indexes[x] : undefined);
+  const idx = new Set();
+  for (const s of raw) for (const item of s.items) {
+    const pts = item.raw.points || [];
+    const want = verbose ? pts : pts.length ? [pts[0], pts[pts.length - 1]] : [];
+    want.forEach(p => { const b = barIndex(s, p.x); if (Number.isFinite(b)) idx.add(b); });
+  }
+  let times = {};
+  try {
+    times = await evaluate(`
+      (function() {
+        var bars = ${BARS_PATH};
+        var out = {};
+        ${JSON.stringify([...idx].filter(Number.isFinite))}.forEach(function(x) {
+          try { if (x >= bars.firstIndex() && x <= bars.lastIndex()) { var v = bars.valueAt(x); if (v) out[x] = v[0]; } } catch (e) {}
+        });
+        return out;
+      })()
+    `) || {};
+  } catch { times = {}; }
+  const studies = raw.map(s => {
+    // time is null for points beyond the last bar (Pine can draw into the future).
+    const pt = p => { const b = barIndex(s, p.x); return { bar_index: b ?? null, time: times[b] ?? null, price: roundPrice(p.y) }; };
+    const polylines = s.items.map(item => {
+      const v = item.raw;
+      const pts = (v.points || []).filter(p => p && p.y != null);
+      const ys = pts.map(p => p.y);
+      const out = {
+        points: pts.length,
+        closed: !!v.cls,
+        first: pts.length ? pt(pts[0]) : null,
+        last: pts.length ? pt(pts[pts.length - 1]) : null,
+        min: ys.length ? roundPrice(Math.min(...ys)) : null,
+        max: ys.length ? roundPrice(Math.max(...ys)) : null,
+      };
+      if (verbose) { out.id = item.id; out.color = v.c; out.fill_color = v.fc; out.all_points = pts.map(pt); }
+      return out;
+    });
+    return { name: s.name, total_polylines: s.count, polylines };
   });
   return { success: true, study_count: studies.length, studies };
 }

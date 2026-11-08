@@ -56,7 +56,7 @@ export function registerDataTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('data_get_pine_labels', 'Read text labels drawn by Pine Script indicators (label.new). Returns text and price pairs. Use study_filter to target a specific indicator.', {
+  server.tool('data_get_pine_labels', 'Read text labels drawn by Pine Script indicators (label.new). Returns text and price pairs, plus the tooltip when the label has one. Use study_filter to target a specific indicator.', {
     study_filter: z.string().optional().describe('Substring to match study name. Omit for all.'),
     max_labels: z.coerce.number().optional().describe('Max labels per study (default 50). Set higher if you need all.'),
     verbose: booleanParam().optional().describe('Return raw label data with IDs, colors, positions (default false — returns only text + price)'),
@@ -77,6 +77,14 @@ export function registerDataTools(server) {
     verbose: booleanParam().optional().describe('Return all boxes with IDs and coordinates (default false — returns unique price zones)'),
   }, async ({ study_filter, verbose }) => {
     try { return jsonResult(await core.getPineBoxes({ study_filter, verbose })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('data_get_pine_polylines', 'Read polylines drawn by Pine Script indicators (polyline.new), e.g. ridgelines or curves. Returns per polyline the point count, first/last point (bar index, time, price) and min/max price; verbose returns every point. Use study_filter to target a specific indicator.', {
+    study_filter: z.string().optional().describe('Substring to match study name. Omit for all.'),
+    verbose: booleanParam().optional().describe('Return every point with bar time (default false - summary per polyline)'),
+  }, async ({ study_filter, verbose }) => {
+    try { return jsonResult(await core.getPinePolylines({ study_filter, verbose })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
