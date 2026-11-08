@@ -480,12 +480,21 @@ export async function getErrors() {
     })()
   `);
 
+  const list = errors || [];
+  const realErrors = list.filter(isErrorMarker);
   return {
     success: true,
-    has_errors: errors?.length > 0,
-    error_count: errors?.length || 0,
-    errors: errors || [],
+    has_errors: realErrors.length > 0,
+    error_count: realErrors.length,
+    warning_count: list.length - realErrors.length,
+    errors: list,
   };
+}
+
+// Monaco marker severity: 1 hint, 2 info, 4 warning, 8 error. Only 8 blocks compilation
+// (from upstream PR #563: warnings were being counted as errors).
+function isErrorMarker(mk) {
+  return mk && (mk.severity == null || mk.severity >= 8);
 }
 
 export async function save({ allowTitleMismatch = false } = {}) {
@@ -645,7 +654,9 @@ export async function smartCompile({ allowTitleMismatch = false } = {}) {
   return {
     success: true,
     button_clicked: buttonClicked || 'keyboard_shortcut',
-    has_errors: errors?.length > 0,
+    has_errors: (errors || []).some(isErrorMarker),
+    error_count: (errors || []).filter(isErrorMarker).length,
+    warning_count: (errors || []).filter(mk => !isErrorMarker(mk)).length,
     errors: errors || [],
     study_added: studyAdded,
   };
