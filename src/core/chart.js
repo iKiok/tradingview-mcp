@@ -234,7 +234,10 @@ export async function scrollToDate({ date, _deps } = {}) {
 
   await ensureHistoryLoaded(evaluate, from);
 
-  await evaluate(`
+  // Center on the first bar at/after the target, +-25 bars. A fixed time window broke for
+  // dates outside trading hours (e.g. "2026-10-20" = midnight UTC on an intraday chart):
+  // no bars fell inside it, toIdx < fromIdx, and the zoom silently did nothing.
+  const landed = await evaluate(`
     (function() {
       var chart = ${CHART_API};
       var m = chart._chartWidget.model();
@@ -242,17 +245,23 @@ export async function scrollToDate({ date, _deps } = {}) {
       var bars = m.mainSeries().bars();
       var startIdx = bars.firstIndex();
       var endIdx = bars.lastIndex();
-      var fromIdx = startIdx, toIdx = endIdx;
+      var c = endIdx;
       for (var i = startIdx; i <= endIdx; i++) {
         var v = bars.valueAt(i);
-        if (v && v[0] >= ${from} && fromIdx === startIdx) fromIdx = i;
-        if (v && v[0] <= ${to}) toIdx = i;
+        if (v && v[0] >= ${timestamp}) { c = i; break; }
       }
+      var fromIdx = Math.max(startIdx, c - 25), toIdx = Math.min(endIdx, c + 25);
       ts.zoomToBarsRange(fromIdx, toIdx);
+      var cv = bars.valueAt(c);
+      return { bar_time: cv ? cv[0] : null, before_loaded_history: (bars.valueAt(startIdx) || [0])[0] > ${timestamp} };
     })()
   `);
   await new Promise(r => setTimeout(r, 500));
-  return { success: true, date, centered_on: timestamp, resolution, window: { from, to } };
+  return {
+    success: true, date, centered_on: timestamp, resolution, window: { from, to },
+    centered_bar_time: landed?.bar_time ?? null,
+    ...(landed?.before_loaded_history && { warning: 'Target date is older than the available history; centered on the oldest loaded bar.' }),
+  };
 }
 
 export async function symbolInfo({ _deps } = {}) {

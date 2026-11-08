@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { jsonResult } from './_format.js';
+import { booleanParam } from './_schema.js';
 import * as core from '../core/pine.js';
 
 export function registerPineTools(server) {
@@ -16,7 +17,7 @@ export function registerPineTools(server) {
   });
 
   server.tool('pine_compile', 'Compile / add the current Pine Script to the chart', {
-    allow_title_mismatch: z.boolean().optional().describe('Save even if the editor\'s script name differs from the indicator()/strategy() title in the source. Only use when intentionally updating that saved script.'),
+    allow_title_mismatch: booleanParam().optional().describe('Save even if the editor\'s script name differs from the indicator()/strategy() title in the source. Only use when intentionally updating that saved script.'),
   }, async ({ allow_title_mismatch }) => {
     try { return jsonResult(await core.compile({ allowTitleMismatch: allow_title_mismatch })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
@@ -28,7 +29,7 @@ export function registerPineTools(server) {
   });
 
   server.tool('pine_save', 'Save the current Pine Script (Ctrl+S)', {
-    allow_title_mismatch: z.boolean().optional().describe('Save even if the editor\'s script name differs from the indicator()/strategy() title in the source. Only use when intentionally updating that saved script.'),
+    allow_title_mismatch: booleanParam().optional().describe('Save even if the editor\'s script name differs from the indicator()/strategy() title in the source. Only use when intentionally updating that saved script.'),
   }, async ({ allow_title_mismatch }) => {
     try { return jsonResult(await core.save({ allowTitleMismatch: allow_title_mismatch })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
@@ -40,7 +41,7 @@ export function registerPineTools(server) {
   });
 
   server.tool('pine_smart_compile', 'Intelligent compile: detects button, compiles, checks errors, reports study changes', {
-    allow_title_mismatch: z.boolean().optional().describe('Save even if the editor\'s script name differs from the indicator()/strategy() title in the source. Only use when intentionally updating that saved script.'),
+    allow_title_mismatch: booleanParam().optional().describe('Save even if the editor\'s script name differs from the indicator()/strategy() title in the source. Only use when intentionally updating that saved script.'),
   }, async ({ allow_title_mismatch }) => {
     try { return jsonResult(await core.smartCompile({ allowTitleMismatch: allow_title_mismatch })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
