@@ -69,12 +69,14 @@ export async function ensurePineEditorOpen() {
     })()
   `);
 
-  // Poll up to 30s: on the first open after launch TV lazy-loads the Pine editor bundle
-  // (measured 11.5s on 2026-11-08; the old 10s budget returned false 12ms too early).
+  // NOTE: FIND_MONACO starts with a newline, so `return ${FIND_MONACO} !== null` hit JS
+  // automatic semicolon insertion (`return;` -> undefined) and this poll could never succeed:
+  // every call with the editor closed timed out. Assign to a variable first.
+  // The editor itself appears within ~0.5s of the click (measured 2026-11-08).
   for (let i = 0; i < 150; i++) {
-    await new Promise(r => setTimeout(r, 200));
-    const ready = await evaluate(`(function() { return ${FIND_MONACO} !== null; })()`);
-    if (ready) return true;
+    await new Promise(r => setTimeout(r, 100));
+    const ready = await evaluate(`(function() { var m = ${FIND_MONACO}; return m !== null; })()`);
+    if (ready === true) return true;
   }
   return false;
 }
