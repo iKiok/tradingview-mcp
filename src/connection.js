@@ -33,6 +33,12 @@ export function withTimeout(promise, ms, label) {
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
+// In-flight connect() calls, keyed by targetId ('' = auto-discover chart target).
+// Concurrent tool calls (the MCP host may dispatch several in parallel) that
+// ask for the same target share one CDP handshake instead of each opening
+// its own session and stomping the module-level client/targetInfo state.
+const _connecting = new Map();
+
 // Known direct API paths discovered via live probing (see PROBE_RESULTS.md)
 const KNOWN_PATHS = {
   chartApi: 'window.TradingViewApi._activeChartWidgetWV.value()',
@@ -92,6 +98,22 @@ export async function getClient() {
 }
 
 export async function connect(targetId = null) {
+  // Single-flight: piggyback on an already-running connect() for the same
+  // target instead of racing it. Without this, two concurrent first-connects
+  // (e.g. two tool calls dispatched in parallel while `client` is still null)
+  // would each open their own CDP session and independently overwrite the
+  // shared `client`/`targetInfo` module state — leaking whichever session
+  // loses the race and potentially handing one caller a client object that
+  // no longer matches what `targetInfo` claims.
+  const key = targetId || '';
+  if (_connecting.has(key)) return _connecting.get(key);
+
+  const promise = _doConnect(targetId).finally(() => _connecting.delete(key));
+  _connecting.set(key, promise);
+  return promise;
+}
+
+async function _doConnect(targetId) {
   let lastError;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
